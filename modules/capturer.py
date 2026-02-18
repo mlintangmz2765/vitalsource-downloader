@@ -16,26 +16,19 @@ class Capturer:
     def hide_ui_elements(self):
         """Hides known UI elements that might obstruct the view."""
         try:
-            # Hide ToC Sidebar, Header, Scrubber, Footer
-            # Selectors based on general observation
             display_none_style = """
-                /* Sidebar/ToC Container */
                 nav[aria-label='Table of Contents'], 
                 .sc-hFLmAl.hLmjGr,
-                /* Header/Toolbar */
                 header, 
                 div[role="banner"],
-                /* Scrubber/Footer */
                 footer, 
                 div[data-testid="scrubber"],
                 .sc-wkwDy.ebHWgB,
-                /* Buttons & Interactive UI (The black floating elements) */
                 button,
                 [role="button"],
                 [aria-label*="sidebar"],
                 [class*="Button"],
-                /* Any other overlays */
-                #vst-app-container > div > div:nth-child(2) /* Sometime sidebars are here */
+                #vst-app-container > div > div:nth-child(2)
                 { display: none !important; }
             """
             self.page.add_style_tag(content=display_none_style)
@@ -43,23 +36,10 @@ class Capturer:
             print(f"Warning: could not hide UI: {e}")
 
     def show_ui_elements(self):
-        """Unhides UI elements (restores visibility)."""
+        """Restores UI visibility."""
         try:
-            # We can't easily remove a specific style tag without an ID/handle in Playwright 
-            # unless we injected it with one. 
-            # But we can inject a new style that resets display to block/flex/etc, OR 
-            # we can reload the page (too slow).
-            # Better approach: We injected 'display: none !important'. 
-            # Overriding that is hard without knowing original display values.
-            # However, we can use JS to remove the style tag if we can find it.
-            # But we didn't give it an ID.
-            # Workaround: Inject a new style that sets display: block/flex !important 
-            # or try to remove the last added style tag.
-            
-            # Simple JS removal:
             self.page.evaluate("""
                 const styles = document.querySelectorAll('style');
-                // Remove the last one, assumingly ours
                 if (styles.length > 0) {
                     styles[styles.length - 1].remove();
                 }
@@ -68,23 +48,15 @@ class Capturer:
              print(f"Warning: could not show UI: {e}")
 
     def capture_page(self, page_index: int, zoom_level: int = 1.0) -> dict:
-        """
-        Captures the current page content.
-        Returns metadata including image path and links.
-        """
-        # 1. Wait for Network Idle (HD Loading)
+        """Captures page content and returns metadata."""
         try:
-            # Wait for network idle to ensure high-res images load
-            # This is critical for slow internet connections
             self.page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(4) # Extra sleep for canvas/rendering stability
+            time.sleep(4)
         except:
             print("Warning: Network idle timeout, proceeding...")
             time.sleep(2)
 
-        # 2. Hide UI
         self.hide_ui_elements()
-
         # Element to capture.
         element = None
         
@@ -101,19 +73,16 @@ class Capturer:
                     except:
                         continue
             
-            # Fallback 1: specific title or src
             if not element:
                  frame_handle = self.page.frame_locator('iframe[title="Document reading pane"]').first
                  if frame_handle:
                      element = frame_handle.locator("body").first
 
-            # Fallback 2: wrapper frame
             if not element:
                  frame_handle = self.page.frame_locator('iframe[src*="wrapper.html"]').first
                  if frame_handle:
                       element = frame_handle.locator("body").first
 
-            # Fallback 3: generic jigsaw
             if not element:
                  frame_handle = self.page.frame_locator('iframe[src*="jigsaw.vitalsource.com"]').first
                  if frame_handle:
@@ -123,11 +92,9 @@ class Capturer:
              pass
 
         if not element or element.count() == 0:
-            # Fallback to full page screenshot, but this might include UI
             element = self.page.locator("body")
-            print("Warning: capturing full body, UI might be visible.")
+            print("Warning: capturing full body.")
 
-        # Ensure high DPI
         image_path = os.path.join(self.output_dir, f"page_{page_index:04d}.png")
         
         # Capture screenshot

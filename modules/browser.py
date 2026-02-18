@@ -11,17 +11,30 @@ class BrowserManager:
         self.page = None
 
     def start(self):
-        """Starts the Playwright browser with persistent context."""
+        """Starts the Playwright browser."""
         self.playwright = sync_playwright().start()
-        self.context = self.playwright.chromium.launch_persistent_context(
-            user_data_dir=self.user_data_dir,
+        
+        # Browser initialization
+        self.browser_instance = self.playwright.chromium.launch(
             headless=self.headless,
-            viewport={"width": 1600, "height": 3000}, # Taller viewport to prevent cutoff
-            device_scale_factor=4, # Ultra High DPI for HD capture
-            args=["--start-maximized"]
+            args=[
+                "--start-maximized",
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox", 
+                "--disable-infobars",
+                "--disable-dev-shm-usage", # Critical for low RAM/docker
+                "--disable-gpu"
+            ]
         )
         
-        # Load cookies if they exist in the project directory
+        # Create context with standard settings
+        self.context = self.browser_instance.new_context(
+            viewport=None, 
+            device_scale_factor=4,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        
+        # Load cookies
         self.load_cookies("cookies.json")
 
         # Create a new page or get the first one
@@ -32,6 +45,12 @@ class BrowserManager:
         
         # Set default timeout
         self.page.set_default_timeout(30000)
+
+    def set_high_res_viewport(self):
+        """Switches the current page to a high-resolution tall viewport for capturing."""
+        if self.page:
+            self.page.set_viewport_size({"width": 1600, "height": 3000})
+            print("Viewport switched to Ultra HD (1600x3000)")
 
     def save_cookies(self, path: str):
         """Saves cookies to a JSON file."""
@@ -69,7 +88,14 @@ class BrowserManager:
     def close(self):
         """Closes the browser."""
         if self.context:
-            self.context.close()
+            try:
+                self.context.close()
+            except:
+                pass
+        
+        if hasattr(self, 'browser_instance') and self.browser_instance:
+             self.browser_instance.close()
+             
         if self.playwright:
             self.playwright.stop()
 

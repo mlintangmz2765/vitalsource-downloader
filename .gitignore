@@ -3,12 +3,13 @@ __pycache__/
 *.pyc
 venv/
 .env
-*.zip
 
 # Project specific
 output/
 user_data/
 cookies.json
+*.zip
+debug_*
 
 # IDE
 .vscode/

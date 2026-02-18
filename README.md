@@ -57,16 +57,28 @@ A robust, full-featured script to convert VitalSource e-textbooks into professio
 
 ## VPS / Headless Setup
 
-To run this on a generic Linux VPS (Ubuntu/Debian):
+To run this on a generic Linux VPS (Ubuntu/Debian) where you cannot open a browser window:
 
 1.  **Install System Dependencies**:
     ```bash
     sudo apt-get update && sudo apt-get install -y tesseract-ocr
+    pip install -r requirements.txt
     playwright install-deps
+    playwright install chromium
     ```
 
-2.  **Run with Headless Mode**:
-    Always use the `--headless` flag.
+2.  **Login Trick (Cookie Export)**:
+    Since the VPS has no screen, you cannot log in manually there.
+    -   **Step A**: Run the script on your **Local Data/Laptop** first. Log in normally.
+    -   **Step B**: Once logged in locally, the script creates a `cookies.json` file.
+    -   **Step C**: Upload this `cookies.json` file to your VPS folder (same folder as `main.py`).
+    -   **Step D**: Run the script on VPS. It will load `cookies.json` and skip the login screen automatically!
+
+3.  **Run with Headless Mode**:
+    Always use the `--headless` flag on VPS.
+    ```bash
+    python3 main.py --url "..." --headless
+    ```
 
 ## Disclaimer
 
