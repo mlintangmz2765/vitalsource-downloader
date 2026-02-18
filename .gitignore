@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 venv/
 .env
+.zip
 
 # Project specific
 output/
