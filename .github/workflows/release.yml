@@ -20,7 +20,7 @@ jobs:
           zip -r vitalsource-downloader.zip . -x "venv/*" "output/*" ".git/*" ".github/*"
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v1
         with:
           files: vitalsource-downloader.zip
           generate_release_notes: true
