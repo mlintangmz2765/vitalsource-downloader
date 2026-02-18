@@ -94,18 +94,33 @@ def main():
             except Exception as e:
                 print(f"Error parsing pages argument. Capturing all.")
 
-        total_pages = len(pages_to_capture)
-        print(f"Planning to capture {total_pages} pages.")
+        if start_page > 1:
+             print(f"Jumping to page {start_page}...")
+             base_url = args.url.split("/pageid/")[0]
+             jump_url = f"{base_url}/pageid/{start_page}"
+             
+             browser.page.goto(jump_url)
+             try:
+                 browser.page.wait_for_selector("iframe[src*='jigsaw'], #vst-app-container, div#print-content", timeout=20000)
+                 time.sleep(5)
+             except:
+                 print("Warning: Jump navigation timed out.")
 
-        page_files = []
-        page_count = 0
-        max_pages_limit = 2500
-        detected_total = navigator.get_total_pages()
-        pbar_total = detected_total if detected_total else None
-        pbar = tqdm(total=pbar_total, desc="Capturing Pages", unit="page")
+        # Initialize counters
+        page_count = start_page - 1
+        # Set limit
+        if end_page:
+            loop_limit = end_page
+        else:
+             # Try to detect if not set
+             detected_total = navigator.get_total_pages()
+             loop_limit = detected_total if detected_total else max_pages_limit
 
-        # Determine loop limit
-        loop_limit = total_pages if args.pages.lower() != "all" else max_pages_limit
+        print(f"Starting capture from page {start_page} to {loop_limit}")
+        
+        # approximate total for progress bar
+        total_to_capture = loop_limit - page_count
+        pbar = tqdm(total=total_to_capture, desc="Capturing Pages", unit="page")
 
         # Page capture loop
         while page_count < loop_limit:
@@ -130,15 +145,19 @@ def main():
                     break
                 
                 if page_count % 25 == 0:
-                    pbar.set_description("Optimizing RAM...")
-                    import gc
-                    gc.collect()
-                    browser.page.reload()
-                    browser.page.wait_for_load_state("networkidle")
-                    browser.set_high_res_viewport()
-                    capturer = Capturer(browser.page, output_dir)
-                    navigator = Navigator(browser.page)
-                    pbar.set_description("Capturing Pages")
+                    try:
+                        pbar.set_description("Optimizing RAM...")
+                        import gc
+                        gc.collect()
+                        browser.page.reload(timeout=60000)
+                        browser.page.wait_for_load_state("domcontentloaded", timeout=60000)
+                        browser.set_high_res_viewport()
+                        capturer = Capturer(browser.page, output_dir)
+                        navigator = Navigator(browser.page)
+                    except Exception as e:
+                        print(f"RAM Optimization warning: {e}")
+                    finally:
+                        pbar.set_description("Capturing Pages")
 
             except Exception as e:
                 print(f"Error capturing page {page_count}: {e}")
