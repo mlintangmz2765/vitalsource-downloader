@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Project specific
+output/
+user_data/
+cookies.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

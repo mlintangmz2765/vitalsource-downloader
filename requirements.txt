@@ -1,0 +1,17 @@
+beautifulsoup4==4.14.3
+charset-normalizer==3.4.4
+Deprecated==1.3.1
+greenlet==3.3.1
+lxml==6.0.2
+packaging==26.0
+pikepdf==10.3.0
+pillow==12.1.1
+playwright==1.58.0
+pyee==13.0.1
+PyPDF2==3.0.1
+pytesseract==0.3.13
+reportlab==4.4.10
+soupsieve==2.8.3
+tqdm==4.67.3
+typing_extensions==4.15.0
+wrapt==2.1.1
