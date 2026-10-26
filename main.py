@@ -2,13 +2,13 @@ import argparse
 import re
 import os
 import shutil
-import time
 from tqdm import tqdm
 from modules.browser import BrowserManager
 from modules.navigator import Navigator
 from modules.capturer import Capturer
 from modules.ocr import OCRManager
 from modules.pdf_maker import PDFMaker
+from modules.pages import parse_page_spec, describe_pages, navigation_steps, all_pages
 
 BOOKSHELF_HOME = "https://bookshelf.vitalsource.com/"
 READER_URL_RE = re.compile(r"https://bookshelf\.vitalsource\.com/reader/books/(\d{9,13}X?)")
@@ -101,80 +101,57 @@ def main():
         ocr = OCRManager(target_width_inches=target_width)
         navigator.extract_toc()
 
-        # Determine page range from --pages (e.g. "1-50", "10", "3,7-9"; "all" = everything)
+        # Exact page selection (e.g. "3,7-9" captures pages 3, 7, 8 and 9 only)
+        try:
+            selected_pages = parse_page_spec(args.pages)
+        except ValueError as e:
+            print(f"{e}. Use forms like '5', '1-10' or '3,7-9', or 'all'.")
+            return
+
+        if selected_pages is None:
+            # Page count comes from the reader's page list when available; otherwise the
+            # capture is open-ended and stops when the Next button no longer advances.
+            detected_total = navigator.get_total_pages(isbn)
+            targets = all_pages(detected_total)
+            pbar_total = detected_total
+            print("Capturing the whole book" + (f" ({detected_total} pages)" if detected_total else ""))
+        else:
+            targets = selected_pages
+            pbar_total = len(selected_pages)
+            print(f"Capturing {len(selected_pages)} page(s): {describe_pages(selected_pages)}")
+
         page_files = []
         max_pages_limit = 2500
-        start_page = 1
-        end_page = None
-        if args.pages and args.pages.lower() != "all":
-            try:
-                indices = set()
-                for part in args.pages.split(','):
-                    part = part.strip()
-                    if '-' in part:
-                        lo, hi = map(int, part.split('-'))
-                        indices.update(range(lo, hi + 1))
-                    elif part:
-                        indices.add(int(part))
-                if indices:
-                    start_page = max(1, min(indices))
-                    end_page = max(indices)
-            except Exception:
-                print("Error parsing pages argument. Capturing all.")
-                start_page, end_page = 1, None
-
-        # Always jump explicitly: the reader otherwise resumes at the last-read position,
-        # not at page 1. Reader pageids are zero-based (pageid/0 is the first page).
-        print(f"Jumping to page {start_page}...")
-        jump_url = f"{book_url}/pageid/{start_page - 1}"
-        browser.page.goto(jump_url)
-        try:
-            browser.page.wait_for_selector("iframe[src*='jigsaw'], #vst-app-container, div#print-content", timeout=20000)
-            time.sleep(3)
-        except Exception:
-            print("Warning: Jump navigation timed out.")
-
-        # Initialize counters
-        page_count = start_page - 1
-        # Set limit
-        if end_page:
-            loop_limit = end_page
-            pbar_total = loop_limit - page_count
-            print(f"Starting capture from page {start_page} to {loop_limit}")
-        else:
-            # Page count comes from the reader's page list when available; otherwise the
-            # loop simply ends when the Next button stops advancing the reader.
-            detected_total = navigator.get_total_pages(isbn)
-            loop_limit = detected_total if detected_total else max_pages_limit
-            pbar_total = (detected_total - page_count) if detected_total else None
-            print(f"Starting capture from page {start_page} until the end of the book"
-                  + (f" ({detected_total} pages)" if detected_total else ""))
-
+        captured = 0
         pbar = tqdm(total=pbar_total, desc="Capturing Pages", unit="page")
 
-        # Page capture loop
-        while page_count < loop_limit:
+        # Page capture loop: consecutive pages use the Next button; gaps and the first
+        # page jump directly to the reader position.
+        for page_number, action in navigation_steps(targets, limit=max_pages_limit):
             try:
-                page_count += 1
-                
-                # Capture and process page
-                capturer.capture_page(page_count)
-                
-                filename = f"page_{page_count:04d}.png"
+                if action == "jump":
+                    if not navigator.jump_to_page(book_url, page_number):
+                        print(f"Warning: page {page_number} did not load; capturing anyway.")
+                elif not navigator.next_page():
+                    print("Reached the end of the book.")
+                    break
+
+                capturer.capture_page(page_number)
+
+                filename = f"page_{page_number:04d}.png"
                 filepath = os.path.join(output_dir, filename)
-                
+
                 optimized_pdf_page = ocr.image_to_pdf(filepath)
                 if optimized_pdf_page:
                     page_files.append(optimized_pdf_page)
                     if os.path.exists(filepath):
                         os.remove(filepath)
-                
+
                 pbar.update(1)
-                
-                if not navigator.next_page():
-                    break
-                
-                if page_count % 25 == 0:
+                captured += 1
+
+                if captured % 25 == 0:
+                    # Periodic reload keeps memory in check; the reader stays on the same page.
                     try:
                         pbar.set_description("Optimizing RAM...")
                         import gc
@@ -184,15 +161,14 @@ def main():
                         browser.set_high_res_viewport()
                         capturer = Capturer(browser.page, output_dir)
                         navigator = Navigator(browser.page)
+                        navigator.wait_for_content()
                     except Exception as e:
                         print(f"RAM Optimization warning: {e}")
                     finally:
                         pbar.set_description("Capturing Pages")
 
             except Exception as e:
-                print(f"Error capturing page {page_count}: {e}")
-                if not navigator.next_page():
-                    break
+                print(f"Error capturing page {page_number}: {e}")
 
         pbar.close()
 

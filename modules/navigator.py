@@ -197,6 +197,11 @@ class Navigator:
             self.page.wait_for_timeout(200)
         return None
 
+    def jump_to_page(self, book_url: str, page_number: int):
+        """Moves the reader directly to a 1-based page. Reader pageids are zero-based."""
+        self.page.goto(f"{book_url.rstrip('/')}/pageid/{page_number - 1}")
+        return self.wait_for_content() is not None
+
     def next_page(self):
         """Navigates to the next page. Returns False when the page did not change (end of book)."""
         try:
