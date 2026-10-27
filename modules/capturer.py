@@ -13,6 +13,21 @@ class Capturer:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
+    def _wait_for_visible_content_frame(self, timeout_ms=30000):
+        """Returns the visible jigsaw content frame once loaded, or None on timeout."""
+        deadline = time.time() + timeout_ms / 1000.0
+        while time.time() < deadline:
+            for frame in self.page.frames:
+                if "/content" in frame.url and "jigsaw" in frame.url:
+                    try:
+                        if frame.frame_element().is_visible():
+                            frame.wait_for_load_state("load", timeout=max(1000, int((deadline - time.time()) * 1000)))
+                            return frame
+                    except Exception:
+                        continue
+            self.page.wait_for_timeout(200)
+        return None
+
     def hide_ui_elements(self):
         """Hides known UI elements that might obstruct the view."""
         try:
@@ -31,65 +46,42 @@ class Capturer:
                 #vst-app-container > div > div:nth-child(2)
                 { display: none !important; }
             """
-            self.page.add_style_tag(content=display_none_style)
+            self.page.evaluate("""(css) => {
+                const s = document.createElement('style');
+                s.setAttribute('data-vsd-hide', '1');
+                s.textContent = css;
+                document.head.appendChild(s);
+            }""", display_none_style)
         except Exception as e:
             print(f"Warning: could not hide UI: {e}")
 
     def show_ui_elements(self):
         """Restores UI visibility."""
         try:
-            self.page.evaluate("""
-                const styles = document.querySelectorAll('style');
-                if (styles.length > 0) {
-                    styles[styles.length - 1].remove();
-                }
-            """)
+            self.page.evaluate("""() => {
+                document.querySelectorAll('style[data-vsd-hide]').forEach(s => s.remove());
+            }""")
         except Exception as e:
              print(f"Warning: could not show UI: {e}")
 
     def capture_page(self, page_index: int, zoom_level: int = 1.0) -> dict:
         """Captures page content and returns metadata."""
-        try:
-            self.page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(4)
-        except:
-            print("Warning: Network idle timeout, proceeding...")
-            time.sleep(2)
+        # Wait for the visible content iframe (the reader also keeps a hidden, preloaded
+        # iframe for the next page, so we must pick the visible one, not the first one).
+        element = None
+        content_frame = self._wait_for_visible_content_frame(timeout_ms=30000)
+        if content_frame is not None:
+            self.page.wait_for_timeout(1000)  # let fonts/images settle
+            try:
+                body = content_frame.locator("body").first
+                if body.count() > 0:
+                    element = body
+            except Exception:
+                element = None
+        else:
+            print("Warning: content frame not found, falling back to page body.")
 
         self.hide_ui_elements()
-        # Element to capture.
-        element = None
-        
-        # Try to find the best container
-        try:
-            # Iterate through frames to find the actual content frame
-            for frame in self.page.frames:
-                if "/content" in frame.url and "jigsaw" in frame.url:
-                    try:
-                        body = frame.locator("body").first
-                        if body.count() > 0:
-                            element = body
-                            break
-                    except:
-                        continue
-            
-            if not element:
-                 frame_handle = self.page.frame_locator('iframe[title="Document reading pane"]').first
-                 if frame_handle:
-                     element = frame_handle.locator("body").first
-
-            if not element:
-                 frame_handle = self.page.frame_locator('iframe[src*="wrapper.html"]').first
-                 if frame_handle:
-                      element = frame_handle.locator("body").first
-
-            if not element:
-                 frame_handle = self.page.frame_locator('iframe[src*="jigsaw.vitalsource.com"]').first
-                 if frame_handle:
-                      element = frame_handle.locator("body").first
-        except Exception as e:
-             print(f"Error finding frame: {e}")
-             pass
 
         if not element or element.count() == 0:
             element = self.page.locator("body")
@@ -107,6 +99,9 @@ class Capturer:
 
         # Extract Links
         links = self.extract_links(element, page_index)
+
+        # Put the reader controls back so navigation can click them
+        self.show_ui_elements()
         
         return {
             "page_index": page_index,

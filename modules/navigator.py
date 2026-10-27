@@ -11,40 +11,53 @@ class Navigator:
         self.page = page
         self.toc = []  # List of dictionaries: {title, page_index, level, id}
 
-    def get_page_width_inches(self):
-        """Detects page width from DOM styles."""
+    # Common trim sizes (width, height in inches). Order matters: the first entry
+    # within tolerance of the measured aspect ratio wins.
+    TRIM_SIZES = [
+        ("6 x 9 in", 6.0, 9.0),
+        ("7 x 10 in", 7.0, 10.0),
+        ("8.5 x 11 in (US Letter)", 8.5, 11.0),
+        ("A4", 8.27, 11.69),
+        ("5.5 x 8.5 in", 5.5, 8.5),
+        ("8 x 10 in", 8.0, 10.0),
+        ("A5", 5.83, 8.27),
+        ("5 x 8 in", 5.0, 8.0),
+        ("8.5 x 8.5 in (square)", 8.5, 8.5),
+        ("11 x 8.5 in (landscape)", 11.0, 8.5),
+    ]
+
+    def measure_page_ratio(self):
+        """Returns width/height of the rendered page, measured inside the content frame."""
+        frame = self.wait_for_content(timeout_ms=30000)
+        if frame is None:
+            return None
         try:
-            width_px = self.page.evaluate("""() => {
-                const selectors = [
-                    '#jigsaw-content', 
-                    '#book-content', 
-                    '.page-content',
-                    'iframe[src*="jigsaw"]',
-                    'div[data-page-no]'
-                ];
-                
-                for (const sel of selectors) {
-                    const el = document.querySelector(sel);
-                    if (el && el.offsetWidth > 0) {
-                        return el.offsetWidth;
-                    }
-                }
-                
-                const imgs = document.querySelectorAll('img');
-                for (const img of imgs) {
-                     if (img.width > 500) return img.width;
-                }
-                return null;
+            size = frame.evaluate("""() => {
+                const img = [...document.images].find(i => i.naturalWidth > 300 && i.naturalHeight > 300);
+                if (img) return [img.naturalWidth, img.naturalHeight];
+                const page = document.querySelector('#pbk-page') || document.body;
+                const r = page.getBoundingClientRect();
+                return r.width > 0 && r.height > 0 ? [r.width, r.height] : null;
             }""")
-            
-            if width_px:
-                return round(width_px / 96.0, 2)
-            
+            if size and size[1]:
+                return size[0] / size[1]
         except Exception as e:
-            print(f"Warning: Could not detect page width ({e})")
-        
+            print(f"Warning: could not measure page ({e})")
         return None
 
+    def guess_page_size(self):
+        """Picks the closest common trim size to the page's aspect ratio.
+
+        The reader never exposes the physical size, only the proportions, so this is a
+        best guess; --pdf-width overrides it.
+        """
+        ratio = self.measure_page_ratio()
+        if not ratio:
+            return None
+        best = min(self.TRIM_SIZES, key=lambda t: abs(t[1] / t[2] - ratio))
+        if abs(best[1] / best[2] - ratio) > 0.05:
+            return None
+        return {"name": best[0], "width": best[1], "height": best[2], "ratio": ratio}
 
     def open_toc_sidebar(self):
         """Opens the Table of Contents sidebar."""
@@ -114,8 +127,17 @@ class Navigator:
             print(f"Error extracting ToC: {e}")
             self.toc = []
 
-    def get_total_pages(self):
-        """Attempts to determine total page count from UI."""
+    def get_total_pages(self, isbn=None):
+        """Total page count: the reader's page list when available, else scraped from the UI."""
+        if isbn:
+            try:
+                resp = self.page.request.get(f"https://jigsaw.vitalsource.com/books/{isbn}/pages.json")
+                if resp.ok:
+                    pages = resp.json()
+                    if isinstance(pages, list) and pages:
+                        return len(pages)
+            except Exception as e:
+                print(f"Warning: could not fetch page list ({e})")
         try:
             selectors = [
                 'div[class*="ebHWgB"]',
@@ -143,45 +165,65 @@ class Navigator:
             pass
         return None
 
-    def next_page(self):
-        """Navigates to the next page."""
+    def restore_ui(self):
+        """Removes any UI-hiding style tags injected by the Capturer so controls are clickable."""
         try:
-            selectors = [
-                'button[aria-label="Next"]',
-                'button[aria-label="Next page"]',
-                '[data-testid="next-button"]',
-                'button:has(svg[aria-label="Next"])',
-                '#pb-next-button'
-            ]
-            
-            next_btn = None
-            for sel in selectors:
-                btn = self.page.query_selector(sel)
-                if btn and not btn.is_disabled() and btn.is_visible():
-                    next_btn = btn
-                    break
-                
-                if not next_btn:
-                    for frame in self.page.frames:
-                        try:
-                            btn = frame.query_selector(sel)
-                            if btn and not btn.is_disabled() and btn.is_visible():
-                                next_btn = btn
-                                break
-                        except:
-                            continue
-                if next_btn:
-                    break
-            
-            if next_btn:
-                next_btn.click()
-                time.sleep(1.5) 
-                return True
-            else:
-                # Keyboard fallback
+            self.page.evaluate("""() => {
+                document.querySelectorAll('style[data-vsd-hide]').forEach(s => s.remove());
+            }""")
+        except Exception:
+            pass
+
+    def current_url(self):
+        """Returns the live URL (page.url can be stale in the sync API between calls)."""
+        try:
+            return self.page.evaluate("location.href")
+        except Exception:
+            return self.page.url
+
+    def wait_for_content(self, timeout_ms: int = 30000):
+        """Waits for the visible jigsaw content iframe to finish loading. Returns the frame or None."""
+        deadline = time.time() + timeout_ms / 1000.0
+        while time.time() < deadline:
+            for frame in self.page.frames:
+                if "/content" in frame.url and "jigsaw" in frame.url:
+                    try:
+                        el = frame.frame_element()
+                        if el.is_visible():
+                            frame.wait_for_load_state("load", timeout=max(1000, int((deadline - time.time()) * 1000)))
+                            return frame
+                    except Exception:
+                        continue
+            self.page.wait_for_timeout(200)
+        return None
+
+    def jump_to_page(self, book_url: str, page_number: int):
+        """Moves the reader directly to a 1-based page. Reader pageids are zero-based."""
+        self.page.goto(f"{book_url.rstrip('/')}/pageid/{page_number - 1}")
+        return self.wait_for_content() is not None
+
+    def next_page(self):
+        """Navigates to the next page. Returns False when the page did not change (end of book)."""
+        try:
+            self.restore_ui()
+            before = self.current_url()
+
+            next_btn = self.page.locator('button[aria-label="Next"], button[aria-label="Next page"], #pb-next-button').first
+            try:
+                if next_btn.count() and next_btn.is_disabled():
+                    return False
+                next_btn.click(timeout=8000)
+            except Exception:
+                # Button not clickable (re-rendering or hidden): keyboard fallback
                 self.page.keyboard.press("ArrowRight")
-                time.sleep(1.5)
-                return True
+
+            try:
+                self.page.wait_for_url(lambda u: u != before, timeout=10000)
+            except Exception:
+                return False
+
+            self.wait_for_content()
+            return True
         except Exception as e:
             print(f"Navigation error: {e}")
             return False
@@ -195,31 +237,49 @@ class Navigator:
             "producer": "Adobe PDF Library 16.0"        # Spoofing as per user request
         }
         try:
-            # 1. Try to get from page title
-            page_title = self.page.title()
-            if page_title:
-                if "VitalSource Bookshelf:" in page_title:
-                    metadata["title"] = page_title.split("VitalSource Bookshelf:")[1].strip()
-                elif ":" in page_title:
-                    metadata["title"] = page_title.split(":")[1].strip()
-                else:
-                    metadata["title"] = page_title.strip()
+            # The sidebar heading (book title) appears once the reader has fully loaded.
+            try:
+                self.page.wait_for_selector("h2", timeout=15000)
+            except Exception:
+                pass
+
+            # 1. Try to get from page title ("VitalSource Bookshelf: <Book Title>")
+            page_title = self.page.title() or ""
+            if "VitalSource Bookshelf:" in page_title:
+                metadata["title"] = page_title.split("VitalSource Bookshelf:")[1].strip()
+            elif ":" in page_title:
+                metadata["title"] = page_title.split(":", 1)[1].strip()
+            elif page_title.strip() and page_title.strip() != "VitalSource Bookshelf":
+                metadata["title"] = page_title.strip()
 
             # 2. Try to find precise metadata from internal JSON state (Common in React apps)
             try:
                 data = self.page.evaluate("""() => {
                     let title = null;
                     let author = null;
-                    const titleEl = document.querySelector('h1') || document.querySelector('[role="heading"]');
-                    if (titleEl) title = titleEl.innerText;
+                    const clean = (t) => (t || '').trim();
+                    // The reader's <h1> is the app name ("VitalSource Bookshelf"); the book
+                    // title is the <h2> in the ToC sidebar, followed by the author line.
+                    for (const el of document.querySelectorAll('h2, h1, [role="heading"]')) {
+                        const t = clean(el.innerText);
+                        if (!t || /^VitalSource Bookshelf/i.test(t)) continue;
+                        title = t;
+                        const sib = el.nextElementSibling;
+                        if (sib && !sib.querySelector('button, a') && clean(sib.innerText).length < 120) {
+                            author = clean(sib.innerText) || null;
+                        }
+                        break;
+                    }
                     const metaTitle = document.querySelector('meta[property="og:title"]');
-                    if (metaTitle) title = metaTitle.content;
+                    if (metaTitle && metaTitle.content) title = metaTitle.content;
                     return {title, author};
                 }""")
                 
                 if data:
                     if data.get("title"):
                         metadata["title"] = data["title"]
+                    if data.get("author"):
+                        metadata["author"] = data["author"]
                     # If we can't find author, we might leave it or use a generic one
             except:
                 pass

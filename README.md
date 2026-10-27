@@ -36,23 +36,35 @@ A robust, full-featured script to convert VitalSource e-textbooks into professio
 
 ## Usage
 
-1.  **Login**: The script uses a persistent browser context. On the first run, you may need to log in to VitalSource manually in the browser window that pops up.
-
-2.  **Basic Conversion**:
+1.  **Simplest**: run with no arguments. A browser opens on your Bookshelf library; log in,
+    open the book you want, then press Enter in the terminal.
     ```bash
-    python3 main.py --url "https://bookshelf.vitalsource.com/reader/books/[ISBN]"
+    python3 main.py
     ```
 
-3.  **Advanced Options**:
+2.  **With an ISBN or reader URL** (skips the library step):
     ```bash
-    # Download specific pages
-    python3 main.py --url "..." --pages "1-50"
+    python3 main.py [ISBN]
+    python3 main.py "https://bookshelf.vitalsource.com/reader/books/[ISBN]"
+    ```
+    Log in if prompted, wait for the book to load, then press Enter in the terminal.
+    The PDF is written to `output/<ISBN>.pdf`.
 
-    # Set custom PDF width (default is auto-detected or 9.15 inches)
-    python3 main.py --url "..." --pdf-width 8.27  # Force specific size (e.g. A4)
+3.  **Options** (all optional):
+    ```bash
+    # Download specific pages (numbers are reader positions, counting from the cover,
+    # so they include front matter and differ from the printed page numbers)
+    python3 main.py [ISBN] --pages "1-50"
 
-    # Run in background (headless) - Recommended for VPS
-    python3 main.py --url "..." --headless
+    # Page size is guessed from the page proportions (6x9, 7x10, A4, Letter, ...).
+    # Force a width in inches if the guess is wrong:
+    python3 main.py [ISBN] --pdf-width 8.27
+
+    # Custom output name
+    python3 main.py [ISBN] --output my-book.pdf
+
+    # Run in background (headless) - needs a cookies.json from a previous login
+    python3 main.py [ISBN] --headless
     ```
 
 ## VPS / Headless Setup (Step-by-Step)
@@ -91,7 +103,7 @@ Now you can run the script headlessly on your VPS:
 source venv/bin/activate
 
 # Execute headlessly
-python3 main.py --url "https://bookshelf.vitalsource.com/reader/books/[ISBN]" --headless
+python3 main.py [ISBN] --headless
 ```
 
 ## Disclaimer
